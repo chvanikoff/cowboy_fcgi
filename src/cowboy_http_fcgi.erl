@@ -17,7 +17,6 @@
 -behaviour(cowboy_http_handler).
 -export([init/3, handle/2, terminate/2]).
 
--include_lib("cowboy/include/http.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -type uint32() :: 0..(1 bsl 32 - 1).
@@ -43,8 +42,8 @@
                    location :: undefined | binary(),
                    headers = [] :: cowboy_http:headers()}).
 
--spec init({atom(), http}, #http_req{}, [option()]) ->
-            {ok, #http_req{}, #state{}}.
+-spec init({atom(), http}, cowboy_req:req(), [option()]) ->
+            {ok, cowboy_req:req(), #state{}}.
 init({Transport, http}, Req, Opts) ->
   {name, Name} = lists:keyfind(name, 1, Opts),
   Timeout = case lists:keyfind(timeout, 1, Opts) of
@@ -66,7 +65,7 @@ init({Transport, http}, Req, Opts) ->
                      https = Https},
       {ok, Req, State} end.
 
--spec handle(#http_req{}, #state{}) -> {ok, #http_req{}, #state{}}.
+-spec handle(cowboy_req:req(), #state{}) -> {ok, cowboy_req:req(), #state{}}.
 handle(Req = #http_req{path = Path, path_info = undefined}, State) ->
   % php-fpm complains when PATH_TRANSLATED isn't set for /ping and
   % /status requests and it's not non standard to send a empty value
@@ -74,7 +73,7 @@ handle(Req = #http_req{path = Path, path_info = undefined}, State) ->
   handle_scriptname(Req, State, [{<<"PATH_TRANSLATED">>, <<>>}], Path);
 handle(Req, State = #state{path_root = undefined}) ->
   % A path info is here but the handler doesn't have a path root.
-  {ok, Req2} = cowboy_http_req:reply(500, [], [], Req),
+  {ok, Req2} = cowboy_req:reply(500, [], [], Req),
   {ok, Req2, State};
 handle(Req = #http_req{path = Path, path_info = [], raw_path = RawPath},
        State = #state{path_root = PathRoot}) ->
@@ -95,9 +94,9 @@ handle(Req = #http_req{path = Path, path_info = PathInfo},
                {<<"PATH_INFO">>, CGIPathInfo}],
   handle_scriptname(Req, State, CGIParams, ScriptName).
 
--spec handle_scriptname(#http_req{}, #state{}, [{binary(), iodata()}],
+-spec handle_scriptname(cowboy_req:req(), #state{}, [{binary(), iodata()}],
                         cowboy_dispatcher:path_tokens()) ->
-                         {ok, #http_req{}, #state{}}.
+                         {ok, cowboy_req:req(), #state{}}.
 handle_scriptname(Req, State = #state{script_dir = undefined}, CGIParams, []) ->
   handle_req(Req, State, [{<<"SCRIPT_NAME">>, <<"/">>} | CGIParams]);
 handle_scriptname(Req, State = #state{script_dir = undefined}, CGIParams,
@@ -107,7 +106,7 @@ handle_scriptname(Req, State = #state{script_dir = undefined}, CGIParams,
 handle_scriptname(Req, State, _CGIParams, []) ->
   % The handler should send a SCRIPT_FILENAME param but there was no path
   % provided.
-  {ok, Req2} = cowboy_http_req:reply(500, [], [], Req),
+  {ok, Req2} = cowboy_req:reply(500, [], [], Req),
   {ok, Req2, State};
 handle_scriptname(Req, State = #state{script_dir = Dir}, CGIParams,
                   ScriptName) ->
@@ -117,8 +116,8 @@ handle_scriptname(Req, State = #state{script_dir = Dir}, CGIParams,
                   CGIParams],
   handle_req(Req, State, NewCGIParams).
 
--spec handle_req(#http_req{}, #state{}, [{binary(), iodata()}]) ->
-                  {ok, #http_req{}, #state{}}.
+-spec handle_req(cowboy_req:req(), #state{}, [{binary(), iodata()}]) ->
+                  {ok, cowboy_req:req(), #state{}}.
 handle_req(Req = #http_req{method = Method,
                            version = Version,
                            raw_qs = RawQs,
@@ -129,7 +128,7 @@ handle_req(Req = #http_req{method = Method,
                           timeout = Timeout,
                           https = Https},
            CGIParams) ->
-  {{Address, _Port}, Req1} = cowboy_http_req:peer(Req),
+  {{Address, _Port}, Req1} = cowboy_req:peer(Req),
   AddressStr = inet_parse:ntoa(Address),
   % @todo Implement correctly the following parameters:
   % - AUTH_TYPE = auth-scheme token
@@ -150,10 +149,10 @@ handle_req(Req = #http_req{method = Method,
   CGIParams3 = params(Headers, CGIParams2),
   case ex_fcgi:begin_request(Server, responder, CGIParams3, Timeout) of
     error ->
-      {ok, Req2} = cowboy_http_req:reply(502, [], [], Req1),
+      {ok, Req2} = cowboy_req:reply(502, [], [], Req1),
       {ok, Req2, State};
     {ok, Ref} ->
-      Req3 = case cowboy_http_req:body(Req1) of
+      Req3 = case cowboy_req:body(Req1) of
         {ok, Body, Req2} ->
           ex_fcgi:send(Server, Ref, Body),
           Req2;
@@ -164,18 +163,18 @@ handle_req(Req = #http_req{method = Method,
         {Head, Rest, Fold} ->
           case acc_body([], Rest, Fold) of
             error ->
-              cowboy_http_req:reply(502, [], [], Req3);
+              cowboy_req:reply(502, [], [], Req3);
             timeout ->
-              cowboy_http_req:reply(504, [], [], Req3);
+              cowboy_req:reply(504, [], [], Req3);
             CGIBody ->
               send_response(Req3, Head, CGIBody) end;
         error ->
-          cowboy_http_req:reply(502, [], [], Req3);
+          cowboy_req:reply(502, [], [], Req3);
         timeout ->
-          cowboy_http_req:reply(504, [], [], Req3) end,
+          cowboy_req:reply(504, [], [], Req3) end,
       {ok, Req4, State} end.
 
--spec terminate(#http_req{}, #state{}) -> ok.
+-spec terminate(cowboy_req:req(), #state{}) -> ok.
 terminate(_Req, _State) ->
   ok.
 
@@ -430,10 +429,10 @@ acc_body(Acc, eof, _More) ->
 acc_body(Acc, Buffer, More) ->
   More([Buffer | Acc], <<>>, fun acc_body/3).
 
--spec send_response(#http_req{}, #cgi_head{}, [binary()]) -> {ok, #http_req{}}.
+-spec send_response(cowboy_req:req(), #cgi_head{}, [binary()]) -> {ok, cowboy_req:req()}.
 send_response(Req, #cgi_head{location = <<$/, _/binary>>}, _Body) ->
   % @todo Implement 6.2.2. Local Redirect Response.
-  cowboy_http_req:reply(502, [], [], Req);
+  cowboy_req:reply(502, [], [], Req);
 send_response(Req, Head = #cgi_head{location = undefined}, Body) ->
   % 6.2.1. Document Response.
   send_document(Req, Head, Body);
@@ -442,14 +441,14 @@ send_response(Req, Head, Body) ->
   % 6.2.4. Client Redirect Response with Document.
   send_redirect(Req, Head, Body).
 
--spec send_document(#http_req{}, #cgi_head{}, [binary()]) -> {ok, #http_req{}}.
+-spec send_document(cowboy_req:req(), #cgi_head{}, [binary()]) -> {ok, cowboy_req:req()}.
 send_document(Req, #cgi_head{type = undefined}, _Body) ->
-  cowboy_http_req:reply(502, [], [], Req);
+  cowboy_req:reply(502, [], [], Req);
 send_document(Req, #cgi_head{status = Status, type = Type, headers = Headers},
               Body) ->
   reply(Req, Body, Status, Type, Headers).
 
--spec send_redirect(#http_req{}, #cgi_head{}, [binary()]) -> {ok, #http_req{}}.
+-spec send_redirect(cowboy_req:req(), #cgi_head{}, [binary()]) -> {ok, cowboy_req:req()}.
 send_redirect(Req, #cgi_head{status = Status = <<$3, _/binary>>,
                              type = Type,
                              location = Location,
@@ -460,14 +459,14 @@ send_redirect(Req, #cgi_head{type = Type,
                              headers = Headers}, Body) ->
   reply(Req, Body, 302, Type, [{'Location', Location} | Headers]).
 
--spec reply(#http_req{}, [binary()], cowboy_http:status(), undefined | binary(),
+-spec reply(cowboy_req:req(), [binary()], cowboy_http:status(), undefined | binary(),
             cowboy_http:headers()) ->
-             {ok, Req::#http_req{}}.
+             {ok, Req::cowboy_req:req()}.
 %% @todo Filter headers like Content-Length.
 reply(Req, Body, Status, undefined, Headers) ->
-  cowboy_http_req:reply(Status, Headers, Body, Req);
+  cowboy_req:reply(Status, Headers, Body, Req);
 reply(Req, Body, Status, Type, Headers) ->
-  cowboy_http_req:reply(Status, [{'Content-Type', Type} | Headers], Body, Req).
+  cowboy_req:reply(Status, [{'Content-Type', Type} | Headers], Body, Req).
 
 -ifdef(TEST).
 
