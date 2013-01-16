@@ -66,18 +66,24 @@ init({Transport, http}, Req, Opts) ->
       {ok, Req, State} end.
 
 -spec handle(cowboy_req:req(), #state{}) -> {ok, cowboy_req:req(), #state{}}.
-handle(Req = #http_req{path = Path, path_info = undefined}, State) ->
+handle(Req, State) ->
+  {Path, Req2} = cowboy_req:path(Req),
+  {Path_info, Req3} = cowboy_req:path_info(Req2),
+  handle(Req3, State, Path, Path_info).
+
+-spec handle(cowboy_req:req(), #state{}, binary(), cowboy_dispatcher:tokens() | undefined) ->
+  {ok, cowboy_req:req(), #state{}}.
+handle(Req, State, Path, _Path_info = undefined) ->
   % php-fpm complains when PATH_TRANSLATED isn't set for /ping and
   % /status requests and it's not non standard to send a empty value
   % if PathInfo isn't defined (or empty).
   handle_scriptname(Req, State, [{<<"PATH_TRANSLATED">>, <<>>}], Path);
-handle(Req, State = #state{path_root = undefined}) ->
+handle(Req, State = #state{path_root = undefined}, _Path, _Path_info) ->
   % A path info is here but the handler doesn't have a path root.
   {ok, Req2} = cowboy_req:reply(500, [], [], Req),
   {ok, Req2, State};
-handle(Req = #http_req{path = Path, path_info = [], raw_path = RawPath},
-       State = #state{path_root = PathRoot}) ->
-  case binary:last(RawPath) of
+handle(Req, State = #state{path_root = PathRoot}, Path, []) ->
+  case binary:last(Path) of
     $/ ->
       % Trailing slash means CGI path info is "/".
       CGIParams = [{<<"PATH_INFO">>, <<"/">>},
@@ -86,8 +92,7 @@ handle(Req = #http_req{path = Path, path_info = [], raw_path = RawPath},
     _ ->
       % Same as with undefined path info.
       handle_scriptname(Req, State, [{<<"PATH_TRANSLATED">>, <<>>}], Path) end;
-handle(Req = #http_req{path = Path, path_info = PathInfo},
-       State = #state{path_root = PathRoot}) ->
+handle(Req, State = #state{path_root = PathRoot}, Path, PathInfo) ->
   {CGIPathInfo, ScriptName} = path_info(PathInfo, Path),
   PathTranslated = [PathRoot, CGIPathInfo],
   CGIParams = [{<<"PATH_TRANSLATED">>, PathTranslated},
@@ -118,17 +123,17 @@ handle_scriptname(Req, State = #state{script_dir = Dir}, CGIParams,
 
 -spec handle_req(cowboy_req:req(), #state{}, [{binary(), iodata()}]) ->
                   {ok, cowboy_req:req(), #state{}}.
-handle_req(Req = #http_req{method = Method,
-                           version = Version,
-                           raw_qs = RawQs,
-                           raw_host = RawHost,
-                           port = Port,
-                           headers = Headers},
-           State = #state{server = Server,
-                          timeout = Timeout,
-                          https = Https},
+handle_req(Req, State = #state{server = Server,
+            timeout = Timeout,
+            https = Https},
            CGIParams) ->
-  {{Address, _Port}, Req1} = cowboy_req:peer(Req),
+  {Method, Req2} = cowboy_req:method(Req),
+  {Version, Req3} = cowboy_req:version(Req2),
+  {RawQs, Req4} = cowboy_req:qs(Req3),
+  {RawHost, Req5} = cowboy_req:host(Req4),
+  {Port, Req6} = cowboy_req:port(Req5),
+  {Headers, Req7} = cowboy_req:headers(Req6),
+  {{Address, _Port}, Req8} = cowboy_req:peer(Req7),
   AddressStr = inet_parse:ntoa(Address),
   % @todo Implement correctly the following parameters:
   % - AUTH_TYPE = auth-scheme token
@@ -149,30 +154,30 @@ handle_req(Req = #http_req{method = Method,
   CGIParams3 = params(Headers, CGIParams2),
   case ex_fcgi:begin_request(Server, responder, CGIParams3, Timeout) of
     error ->
-      {ok, Req2} = cowboy_req:reply(502, [], [], Req1),
-      {ok, Req2, State};
+      {ok, Req9} = cowboy_req:reply(502, [], [], Req8),
+      {ok, Req9, State};
     {ok, Ref} ->
-      Req3 = case cowboy_req:body(Req1) of
-        {ok, Body, Req2} ->
+      Req10 = case cowboy_req:body(Req8) of
+        {ok, Body, Req9} ->
           ex_fcgi:send(Server, Ref, Body),
-          Req2;
+          Req9;
         {error, badarg} ->
-          Req1 end,
+          Req8 end,
       Fun = fun decode_cgi_head/3,
-      {ok, Req4} = case fold_k_stdout(#cgi_head{}, <<>>, Fun, Ref) of
+      {ok, Req11} = case fold_k_stdout(#cgi_head{}, <<>>, Fun, Ref) of
         {Head, Rest, Fold} ->
           case acc_body([], Rest, Fold) of
             error ->
-              cowboy_req:reply(502, [], [], Req3);
+              cowboy_req:reply(502, [], [], Req10);
             timeout ->
-              cowboy_req:reply(504, [], [], Req3);
+              cowboy_req:reply(504, [], [], Req10);
             CGIBody ->
-              send_response(Req3, Head, CGIBody) end;
+              send_response(Req10, Head, CGIBody) end;
         error ->
-          cowboy_req:reply(502, [], [], Req3);
+          cowboy_req:reply(502, [], [], Req10);
         timeout ->
-          cowboy_req:reply(504, [], [], Req3) end,
-      {ok, Req4, State} end.
+          cowboy_req:reply(504, [], [], Req10) end,
+      {ok, Req11, State} end.
 
 -spec terminate(cowboy_req:req(), #state{}) -> ok.
 terminate(_Req, _State) ->
