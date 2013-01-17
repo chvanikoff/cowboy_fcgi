@@ -67,23 +67,23 @@ init({Transport, http}, Req, Opts) ->
 
 -spec handle(cowboy_req:req(), #state{}) -> {ok, cowboy_req:req(), #state{}}.
 handle(Req, State) ->
-  {Path, Req2} = cowboy_req:path(Req),
+  {Req2, Path, Raw_path} = get_paths(Req),
   {Path_info, Req3} = cowboy_req:path_info(Req2),
-  handle(Req3, State, Path, Path_info).
+  handle(Req3, State, Path, Path_info, Raw_path).
 
--spec handle(cowboy_req:req(), #state{}, binary(), cowboy_dispatcher:tokens() | undefined) ->
+-spec handle(cowboy_req:req(), #state{}, binary(), cowboy_dispatcher:tokens() | undefined, [binary()]) ->
   {ok, cowboy_req:req(), #state{}}.
-handle(Req, State, Path, _Path_info = undefined) ->
+handle(Req, State, Path, undefined, _Raw_path) ->
   % php-fpm complains when PATH_TRANSLATED isn't set for /ping and
   % /status requests and it's not non standard to send a empty value
   % if PathInfo isn't defined (or empty).
   handle_scriptname(Req, State, [{<<"PATH_TRANSLATED">>, <<>>}], Path);
-handle(Req, State = #state{path_root = undefined}, _Path, _Path_info) ->
+handle(Req, State = #state{path_root = undefined}, _Path, _Path_info, _Raw_path) ->
   % A path info is here but the handler doesn't have a path root.
   {ok, Req2} = cowboy_req:reply(500, [], [], Req),
   {ok, Req2, State};
-handle(Req, State = #state{path_root = PathRoot}, Path, []) ->
-  case binary:last(Path) of
+handle(Req, State = #state{path_root = PathRoot}, Path, [], Raw_path) ->
+  case binary:last(Raw_path) of
     $/ ->
       % Trailing slash means CGI path info is "/".
       CGIParams = [{<<"PATH_INFO">>, <<"/">>},
@@ -92,7 +92,7 @@ handle(Req, State = #state{path_root = PathRoot}, Path, []) ->
     _ ->
       % Same as with undefined path info.
       handle_scriptname(Req, State, [{<<"PATH_TRANSLATED">>, <<>>}], Path) end;
-handle(Req, State = #state{path_root = PathRoot}, Path, PathInfo) ->
+handle(Req, State = #state{path_root = PathRoot}, Path, PathInfo, _Raw_path) ->
   {CGIPathInfo, ScriptName} = path_info(PathInfo, Path),
   PathTranslated = [PathRoot, CGIPathInfo],
   CGIParams = [{<<"PATH_TRANSLATED">>, PathTranslated},
@@ -100,7 +100,7 @@ handle(Req, State = #state{path_root = PathRoot}, Path, PathInfo) ->
   handle_scriptname(Req, State, CGIParams, ScriptName).
 
 -spec handle_scriptname(cowboy_req:req(), #state{}, [{binary(), iodata()}],
-                        cowboy_dispatcher:path_tokens()) ->
+                        cowboy_dispatcher:tokens()) ->
                          {ok, cowboy_req:req(), #state{}}.
 handle_scriptname(Req, State = #state{script_dir = undefined}, CGIParams, []) ->
   handle_req(Req, State, [{<<"SCRIPT_NAME">>, <<"/">>} | CGIParams]);
@@ -113,8 +113,7 @@ handle_scriptname(Req, State, _CGIParams, []) ->
   % provided.
   {ok, Req2} = cowboy_req:reply(500, [], [], Req),
   {ok, Req2, State};
-handle_scriptname(Req, State = #state{script_dir = Dir}, CGIParams,
-                  ScriptName) ->
+handle_scriptname(Req, State = #state{script_dir = Dir}, CGIParams, ScriptName) -> 
   CGIScriptName = [[$/, Segment] || Segment <- ScriptName],
   NewCGIParams = [{<<"SCRIPT_NAME">>, CGIScriptName},
                   {<<"SCRIPT_FILENAME">>, [Dir, $/, ScriptName]} |
@@ -183,18 +182,18 @@ handle_req(Req, State = #state{server = Server,
 terminate(_Req, _State) ->
   ok.
 
--spec path_info(PathInfo::cowboy_dispatcher:path_tokens(),
-                Path::cowboy_dispatcher:path_tokens()) ->
+-spec path_info(PathInfo::cowboy_dispatcher:tokens(),
+                Path::cowboy_dispatcher:tokens()) ->
                  {CGIPathInfo::iolist(),
-                  ScriptName::cowboy_dispatcher:path_tokens()}.
+                  ScriptName::cowboy_dispatcher:tokens()}.
 path_info(PathInfo, Path) ->
   path_info(lists:reverse(PathInfo), lists:reverse(Path), []).
 
--spec path_info(PathInfo::cowboy_dispatcher:path_tokens(),
-                Path::cowboy_dispatcher:path_tokens(),
+-spec path_info(PathInfo::cowboy_dispatcher:tokens(),
+                Path::cowboy_dispatcher:tokens(),
                 CGIPathInfo::iolist()) ->
                   {CGIPathInfo::iolist(),
-                   ScriptName::cowboy_dispatcher:path_tokens()}.
+                   ScriptName::cowboy_dispatcher:tokens()}.
 path_info([Segment|PathInfo], [Segment|Path], CGIPathInfo) ->
   path_info(PathInfo, Path, [$/, Segment|CGIPathInfo]);
 path_info([], Path, CGIPathInfo) ->
@@ -472,6 +471,10 @@ reply(Req, Body, Status, undefined, Headers) ->
   cowboy_req:reply(Status, Headers, Body, Req);
 reply(Req, Body, Status, Type, Headers) ->
   cowboy_req:reply(Status, [{'Content-Type', Type} | Headers], Body, Req).
+
+get_paths(Req) ->
+  {RawPath, Req2} = cowboy_req:path(Req),
+  {Req2, [binary:part(RawPath, 1, byte_size(RawPath) - 1)], RawPath}.
 
 -ifdef(TEST).
 
