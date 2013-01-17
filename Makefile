@@ -3,7 +3,7 @@
 DIALYZER = dialyzer
 REBAR = rebar
 
-.PHONY: all app deps clean tests eunit ct build-plt dialyze docs
+.PHONY: all app deps clean tests eunit ct build-plt dialyze docs example
 
 all: app
 
@@ -40,3 +40,6 @@ dialyze:
 
 docs:
 	@$(REBAR) doc
+
+example: all
+	erl -pa ebin deps/*/ebin -s example
