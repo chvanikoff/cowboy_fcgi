@@ -470,7 +470,7 @@ send_redirect(Req, #cgi_head{type = Type,
 reply(Req, Body, Status, undefined, Headers) ->
   cowboy_req:reply(Status, Headers, Body, Req);
 reply(Req, Body, Status, Type, Headers) ->
-  cowboy_req:reply(Status, [{'Content-Type', Type} | Headers], Body, Req).
+  cowboy_req:reply(Status, [{<<"Content-Type">>, Type} | Headers], Body, Req).
 
 get_paths(Req) ->
   {RawPath, Req2} = cowboy_req:path(Req),
